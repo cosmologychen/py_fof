@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Fortran compiled libraries
+py_fof/fof_fortran*.so
+py_fof/fof_fortran*.pyd
+*.o
+*.mod
+
+# Test directory
+.test_ai/
+
+# Images
+*.png
+*.jpg
+*.jpeg
+*.gif
