@@ -20,7 +20,7 @@ L_BOX = 512.0               # 周期性盒子边长
 LINKING_LENGTH = 2.0       # FOF链接长度
 NP_HALO_MIN = 10            # 最小halo粒子数阈值
 
-VELOCITY_SCALE = 0.5        # 速度分布的标准差
+VELOCITY_SCALE = 0.1        # 速度分布的标准差（适配 a/(6*pi) 势场深度）
 
 # =============================================================================
 
@@ -215,8 +215,8 @@ def test_performance():
         halo_shifts.append(np.array([shift_x, shift_y, shift_z]))
     
     for ihalo in range(n_halos):
-        # 生成随机粒子分布
-        xp = np.random.rand(3, n_particles_per_halo).astype(np.float64) * 30 + halo_shifts[ihalo].reshape(3, 1)
+        # 生成随机粒子分布（跨度 12.0 格点 < 17.152，满足 15 Mpc 物理上限并形成致密大 Halo）
+        xp = np.random.rand(3, n_particles_per_halo).astype(np.float64) * 12.0 + halo_shifts[ihalo].reshape(3, 1)
         
         # 生成速度
         vp = np.random.randn(3, n_particles_per_halo).astype(np.float64) * VELOCITY_SCALE
@@ -254,6 +254,9 @@ def test_performance():
     print(f"  FOF time: {fof_time:.2f} s ({n_halos * n_particles_per_halo / fof_time:.0f} particles/s)")
     print(f"  FOF + bound_check time: {bound_time:.2f} s ({n_halos * n_particles_per_halo / bound_time:.0f} particles/s)")
     print("="*60)
+    
+    assert np.sum(in_halo) > 0, "Expected non-zero particles in halos"
+    assert np.sum(in_halo_bound) > 0, "Expected non-zero particles in bound halos"
     
     return xp_list, in_halo, in_halo_bound
 
@@ -708,6 +711,7 @@ def test_predictable_halo():
     n_total = len(correct_mask)
     
     print(f"\n  Per-particle accuracy: {n_correct}/{n_total} ({100*n_correct/n_total:.1f}%)")
+    assert n_correct == n_total, f"Expected 100% accuracy, got {n_correct}/{n_total}"
     
     # 显示错误判断的粒子
     if false_positive > 0:
@@ -751,8 +755,8 @@ def test_predictable_halo_with_velocity():
     print(f"  Halo center: [{halo_center[0]:.2f}, {halo_center[1]:.2f}, {halo_center[2]:.2f}]")
     print(f"  Halo range: [{halo_range[0]:.2f}, {halo_range[1]:.2f}, {halo_range[2]:.2f}]")
     
-    # 生成速度
-    vp = np.random.randn(3, n_halo + n_noise).astype(np.float64) * 0.5
+    # 生成速度（基础热速度标准差 0.1，适配 a/(6*pi) 势阱深度）
+    vp = np.random.randn(3, n_halo + n_noise).astype(np.float64) * 0.1
     
     # 给halo粒子中的10%设置极高的速度
     n_high_v = max(1, int(n_halo * 0.1))
@@ -784,6 +788,8 @@ def test_predictable_halo_with_velocity():
     # 验证高速粒子是否被正确排除
     high_v_removed = np.sum(unbound_in_halo[high_v_indices])
     print(f"    High velocity particles removed: {high_v_removed}/{n_high_v}")
+    assert high_v_removed == n_high_v, f"Expected all {n_high_v} high-v particles removed, got {high_v_removed}"
+    assert np.sum(in_halo_with_check) == (n_halo - n_high_v), f"Expected {n_halo - n_high_v} bound particles, got {np.sum(in_halo_with_check)}"
     
     # 绘图
     plot_particles(xp, in_halo_with_check, unbound_in_halo=unbound_in_halo,
@@ -849,6 +855,7 @@ def test_multiple_predictable_halos():
     expected_all = np.hstack(expected_in_halo_list)
     correct = np.sum(in_halo == expected_all)
     print(f"  Per-particle accuracy: {correct}/{total_particles} ({100*correct/total_particles:.1f}%)")
+    assert correct == total_particles, f"Expected 100% accuracy, got {correct}/{total_particles}"
     
     # 绘图
     xp_all = np.hstack(xp_list)
@@ -881,9 +888,9 @@ def test_multiple_predictable_halos_with_velocity():
     
     # 定义每个halo的偏移量，确保它们在空间上分开
     halo_shifts = [
-        np.array([-500.0, -50.0, 0.0]),   # Halo 1: 左下
-        np.array([500.0, -50.0, 0.0]),    # Halo 2: 右下
-        np.array([0.0, 50.0, 300.0])      # Halo 3: 上方偏后
+        np.array([-50.0, -50.0, 0.0]),   # Halo 1: 左下
+        np.array([50.0, -50.0, 0.0]),    # Halo 2: 右下
+        np.array([0.0, 50.0, 30.0])      # Halo 3: 上方偏后
     ]
     
     for ihalo in range(n_halos):
@@ -898,14 +905,14 @@ def test_multiple_predictable_halos_with_velocity():
         # 给整个数据集添加大偏移，防止不同halo连在一起
         xp = xp + halo_shifts[ihalo].reshape(3, 1)
         
-        # 生成速度
-        vp = np.random.randn(3, n_halo_per_halo + n_noise_per_halo).astype(np.float64) * 0.5
+        # 生成速度（基础热速度标准差 0.1，适配 a/(6*pi) 势阱深度）
+        vp = np.random.randn(3, n_halo_per_halo + n_noise_per_halo).astype(np.float64) * 0.1
         
         # 给halo粒子中的10%设置极高的速度
         n_high_v = max(1, int(n_halo_per_halo * 0.1))
         halo_indices = np.where(expected_in_halo)[0]
         high_v_indices = np.random.choice(halo_indices, n_high_v, replace=False)
-        vp[:, high_v_indices] *= 10.0  # 10倍速度，对于100粒子的halo约排除10%粒子
+        vp[:, high_v_indices] *= 100.0  # 100倍速度，保证高速粒子不束缚
         
         xp_list.append(xp)
         vp_list.append(vp)
@@ -949,6 +956,9 @@ def test_multiple_predictable_halos_with_velocity():
         total_high_v += len(high_v_indices)
     
     print(f"    High velocity particles removed: {total_high_v_removed}/{total_high_v}")
+    assert total_high_v_removed == total_high_v, f"Expected all {total_high_v} high-v particles removed, got {total_high_v_removed}"
+    expected_bound = total_expected - total_high_v
+    assert np.sum(in_halo_with_check) == expected_bound, f"Expected {expected_bound} bound particles, got {np.sum(in_halo_with_check)}"
     
     # 绘图
     xp_all = np.hstack(xp_list)
@@ -1007,6 +1017,158 @@ def test_multiple_predictable_halos_with_velocity():
 #     return xp_list, vp_list, in_halo_with_check
 
 
+# %% 新增功能专项测试
+# 新增功能专项测试
+def test_new_features():
+    """
+    新增功能专项验证测试：
+    1. fof_with_info 的 O(N) 准确性与一致性
+    2. 不同 n_threads (1, 2, 4, None) 并行一致性
+    3. 标量 vs 数组等质量一致性及变质量束缚测试
+    4. 双单位模式 (units='cube' vs 'physical') 及哈勃流测试
+    5. N > 1000 候选跨度 > 15 Mpc 时的安全 ValueError 异常捕获
+    """
+    print("\n" + "="*60)
+    print("Test: New Features Comprehensive Verification")
+    print("="*60)
+
+    # 1. fof_with_info 的 O(N) 准确性
+    print("\n[1/5] Verifying fof_with_info O(N) accuracy...")
+    np.random.seed(101)
+    n_h = 3
+    xp_list = []
+    vp_list = []
+    for i in range(n_h):
+        xp, exp, _, _ = generate_predictable_halo(100, LINKING_LENGTH, 50, seed=101 + i)
+        xp = xp + np.array([i * 100.0, 0.0, 0.0]).reshape(3, 1)
+        vp = np.random.randn(3, 150).astype(np.float64) * 0.05
+        xp_list.append(xp)
+        vp_list.append(vp)
+
+    res_info = fof_with_info(xp_list, vp_list=vp_list, L_Box=L_BOX, linking_length=LINKING_LENGTH,
+                             np_halo_min=NP_HALO_MIN, bound_check=True, return_ang_mom=True)
+    res_fof, ang_mom = fof(xp_list, vp_list=vp_list, L_Box=L_BOX, linking_length=LINKING_LENGTH,
+                           np_halo_min=NP_HALO_MIN, bound_check=True, return_ang_mom=True)
+
+    assert np.array_equal(res_info['in_halo'], res_fof), "fof_with_info in_halo must match fof in_halo"
+    assert res_info['nhalo_found'] == n_h, f"Expected {n_h} halos, got {res_info['nhalo_found']}"
+    assert len(res_info['halo_indices']) == n_h, "halo_indices length mismatch"
+    assert np.sum(res_info['np_per_halo']) == np.sum(res_info['in_halo']), "Sum of np_per_halo must equal total bound particles"
+    all_indices = np.concatenate(res_info['halo_indices']) if len(res_info['halo_indices']) > 0 else np.array([], dtype=int)
+    assert len(all_indices) == len(np.unique(all_indices)), "halo_indices must be disjoint"
+    assert np.all(res_info['in_halo'][all_indices]), "All indices in halo_indices must have in_halo=True"
+    assert np.allclose(res_info['ang_mom'], ang_mom), "ang_mom mismatch in fof_with_info"
+    print("  ✓ fof_with_info passed with exact O(N) halo membership matching fof().")
+
+    # 2. n_threads (1, 2, 4, None) 并行一致性
+    print("\n[2/5] Verifying n_threads consistency (1, 2, 4, None)...")
+    res_threads = {}
+    ang_threads = {}
+    for nt in [1, 2, 4, None]:
+        inh, am = fof(xp_list, vp_list=vp_list, L_Box=L_BOX, linking_length=LINKING_LENGTH,
+                      np_halo_min=NP_HALO_MIN, bound_check=True, n_threads=nt, return_ang_mom=True)
+        res_threads[nt] = inh
+        ang_threads[nt] = am
+
+    base_inh = res_threads[1]
+    base_am = ang_threads[1]
+    for nt in [2, 4, None]:
+        assert np.array_equal(res_threads[nt], base_inh), f"n_threads={nt} in_halo differs from n_threads=1"
+        assert np.allclose(ang_threads[nt], base_am, atol=1e-12), f"n_threads={nt} ang_mom differs from n_threads=1"
+
+    # 测试超限线程数异常
+    try:
+        fof(xp_list, n_threads=300)
+        assert False, "Should have raised ValueError for n_threads > 256"
+    except ValueError as e:
+        print(f"  ✓ Caught expected exception for n_threads > 256: {e}")
+    print("  ✓ Multi-threading (1, 2, 4, None) produces identical bound halo results.")
+
+    # 3. 质量参数 mp_list: 标量 vs 数组等质量一致性及变质量束缚测试
+    print("\n[3/5] Verifying mp_list (scalar vs array and variable mass effects)...")
+    total_p = sum(x.shape[1] for x in xp_list)
+    # 标量 1.0 vs 全 1 数组
+    inh_scalar = fof(xp_list, vp_list=vp_list, L_Box=L_BOX, linking_length=LINKING_LENGTH,
+                     np_halo_min=NP_HALO_MIN, bound_check=True, mp_list=1.0)
+    inh_array = fof(xp_list, vp_list=vp_list, L_Box=L_BOX, linking_length=LINKING_LENGTH,
+                    np_halo_min=NP_HALO_MIN, bound_check=True, mp_list=np.ones(total_p, dtype=np.float64))
+    assert np.array_equal(inh_scalar, inh_array), "Scalar mp_list and equivalent array mp_list must match"
+
+    # 变质量测试：构造单 Halo，给定较高的速度，如果等质量时部分粒子逃逸，但中心增加超大质量后，势阱加深粒子被束缚
+    np.random.seed(202)
+    xp_single, exp_s, _, _ = generate_predictable_halo(100, LINKING_LENGTH, 0, seed=202)
+    # 给定临界速度
+    vp_single = np.random.randn(3, 100).astype(np.float64) * 0.25
+    inh_light = fof(xp_single, vp_list=vp_single, L_Box=L_BOX, linking_length=LINKING_LENGTH,
+                    np_halo_min=NP_HALO_MIN, bound_check=True, mp_list=1.0)
+    # 增加中心粒子的质量到 200 倍
+    mp_heavy = np.ones(100, dtype=np.float64)
+    mp_heavy[0] = 200.0
+    inh_heavy = fof(xp_single, vp_list=vp_single, L_Box=L_BOX, linking_length=LINKING_LENGTH,
+                    np_halo_min=NP_HALO_MIN, bound_check=True, mp_list=mp_heavy)
+    assert np.sum(inh_heavy) >= np.sum(inh_light), "Deeper potential well from heavy center should bind equal or more particles"
+    print(f"  ✓ Variable mass test passed: light bound = {np.sum(inh_light)}, heavy center bound = {np.sum(inh_heavy)}.")
+
+    # 4. 双单位模式 (units='cube' vs 'physical') 及哈勃流测试
+    print("\n[4/5] Verifying units='cube' vs 'physical' and hubble flow...")
+    # units='physical' 缺少 softening 或质量时应抛出异常
+    try:
+        fof(xp_single, vp_list=vp_single, units='physical', bound_check=True)
+        assert False, "Should raise ValueError when softening is missing in units='physical'"
+    except ValueError as e:
+        print(f"  ✓ Caught expected exception for missing softening in units='physical': {e}")
+
+    # 构造等价物理单位测试
+    ng = 512.0
+    box_mpc = 300.0
+    dx = box_mpc / ng
+    xp_phys = xp_single * dx
+    soft_phys = 0.1 * dx
+    om_val = 0.3
+    a_val = 1.0  # z = 0.0
+    v_factor = 150.0 * np.sqrt(om_val) * box_mpc / (a_val * ng)
+    vp_phys = vp_single * v_factor
+    m_grid = om_val * 2.77536627e11 * (box_mpc ** 3) / (ng ** 3)
+    mp_phys = mp_heavy * m_grid
+
+    inh_cube, am_cube = fof(xp_single, vp_list=vp_single, L_Box=ng, linking_length=LINKING_LENGTH,
+                            np_halo_min=NP_HALO_MIN, bound_check=True, mp_list=mp_heavy,
+                            softening=0.1, units='cube', return_ang_mom=True)
+    inh_phys, am_phys = fof(xp_phys, vp_list=vp_phys, L_Box=box_mpc, linking_length=LINKING_LENGTH * dx,
+                            np_halo_min=NP_HALO_MIN, bound_check=True, mp_list=mp_phys,
+                            softening=soft_phys, units='physical', return_ang_mom=True)
+    assert np.array_equal(inh_cube, inh_phys), "units='cube' and equivalent units='physical' must produce identical in_halo"
+    assert np.allclose(am_cube * (m_grid * dx * v_factor), am_phys, rtol=1e-5), "Converted physical angular momentum mismatch"
+    print("  ✓ units='cube' and units='physical' equivalence verified.")
+
+    # 验证 include_hubble_flow
+    inh_hf = fof(xp_phys, vp_list=vp_phys, L_Box=box_mpc, linking_length=LINKING_LENGTH * dx,
+                 np_halo_min=NP_HALO_MIN, bound_check=True, mp_list=mp_phys,
+                 softening=soft_phys, units='physical', include_hubble_flow=True)
+    assert isinstance(inh_hf, np.ndarray), "include_hubble_flow=True should return valid boolean array"
+    print("  ✓ include_hubble_flow=True verified.")
+
+    # 5. N > 1000 候选跨度 > 15 Mpc 时的安全 ValueError 异常捕获
+    print("\n[5/5] Verifying 15 Mpc span limit ValueError for N > 1000...")
+    # 构造 N = 1050 粒子，沿 X 轴分布，总跨度为 25.0 格点（> s_15 ≈ 17.152 格点）
+    # 相邻间隔 25.0 / 1050 ≈ 0.0238 格点 << linking_length=2.0，必定连成一个 Halo 候选
+    np_large = 1050
+    x_coords = np.linspace(10.0, 35.0, np_large, endpoint=True)  # span = 25.0 > 17.152
+    y_coords = np.zeros(np_large)
+    z_coords = np.zeros(np_large)
+    xp_overspan = np.vstack([x_coords, y_coords, z_coords])
+    vp_overspan = np.zeros((3, np_large), dtype=np.float64)
+
+    try:
+        fof(xp_overspan, vp_list=vp_overspan, L_Box=L_BOX, linking_length=LINKING_LENGTH,
+            np_halo_min=NP_HALO_MIN, bound_check=True, box=300.0, h0=0.67)
+        assert False, "Should raise ValueError when candidate halo span exceeds 15 Mpc"
+    except ValueError as e:
+        print(f"  ✓ Successfully caught expected ValueError without crashing Python: {e}")
+        assert "Candidate halo span exceeds 15 Mpc limit" in str(e) or "exceeds" in str(e)
+    print("  ✓ 15 Mpc span safety limit verified.")
+
+
 # %%
 # 主函数
 def main():
@@ -1032,6 +1194,9 @@ def main():
         test_multiple_predictable_halos()
         test_multiple_predictable_halos_with_velocity()
         # test_multiple_halos_with_velocity()
+        
+        # 专项新功能验证
+        test_new_features()
         
         # 性能测试
         test_performance()

@@ -1,5 +1,8 @@
 include README.md
+include README_CN.md
 include LICENSE
 include requirements.txt
 include fof_fortran.f90
+include bound_fortran.f90
+include atomic_dsu.c
 recursive-include py_fof *.f90 *.so

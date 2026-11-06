@@ -5,12 +5,15 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+new_fof_full/
+.*/
 
 # Fortran compiled libraries
 py_fof/fof_fortran*.so
 py_fof/fof_fortran*.pyd
 *.o
 *.mod
+*.zip
 
 # Test directory
 .test_ai/

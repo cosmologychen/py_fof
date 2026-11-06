@@ -7,12 +7,11 @@ Python interface for the Fortran FOF implementation, providing a user-friendly A
 
 ## Features
 
-- **Fast FOF Algorithm**: Core implementation in Fortran with OpenMP parallelization
-- **Python Interface**: Easy-to-use Python API with NumPy arrays
-- **Binding Check**: Optional velocity-based gravitational binding check
-- **Multiple Halo Support**: Handle multiple halos in a single call
-- **Periodic Boundary Conditions**: Automatic handling of periodic boundaries
-- **Visualization Tools**: Built-in plotting functions for result visualization
+- **High-Performance FOF**: Core algorithm based on 2-pass spatial CRS + 13 half-neighborhood search + lock-free atomic Disjoint-Set Union (DSU) in Fortran/C with OpenMP multi-threading.
+- **Adaptive Gravitational Unbinding**: Multi-resolution isolated PM (48~256 grids) + C2 short-range continuous softening residuals and analytic direct summation, iteratively removing unbound particles in 2% energy batches.
+- **Dual Unit Modes & Variable Mass**: Seamless support for CUBE grid units (`units='cube'`) and astrophysical physical units (`units='physical'`: Mpc/h, km/s, \(M_\odot/h\)), supporting equal and per-particle variable masses.
+- **Pythonic API**: Single or multi-halo inputs, periodic boundary handling, $O(N)$ linear catalog generation, and angular momentum calculation.
+- **Automated Mixed Build**: On-demand timestamp checking and f2py/gcc/gfortran compilation into `py_fof/`.
 
 ## Installation
 
@@ -21,7 +20,9 @@ Python interface for the Fortran FOF implementation, providing a user-friendly A
 - Python >= 3.8
 - NumPy >= 1.20
 - Matplotlib >= 3.0
-- A Fortran compiler (gfortran recommended)
+- C compiler (`gcc`)
+- Fortran compiler (`gfortran` recommended, with OpenMP)
+- FFTW3 single-precision library (`libfftw3f`)
 
 ### Install from Source
 
@@ -31,15 +32,14 @@ cd py_fof
 pip install .
 ```
 
-The Fortran code will be automatically compiled during installation.
+The Fortran & C extensions will be automatically compiled during installation or upon first import.
 
 ### Manual Compilation (Optional)
 
-If automatic compilation fails, you can manually compile the Fortran code:
+See [INSTALL.md](INSTALL.md) for detailed manual compilation instructions. Alternatively:
 
 ```bash
-python -m numpy.f2py -c fof_fortran.f90 -m fof_fortran --f90flags='-O3 -fopenmp'
-mv fof_fortran*.so py_fof/
+python -c "import py_fof"
 ```
 
 ## Quick Start
@@ -107,36 +107,54 @@ plot_particles(
 
 ## API Reference
 
-### `fof(xp_list, vp_list=None, L_Box=512.0, linking_length=0.2, np_halo_min=10, bound_check=False, verbose=0)`
-
-Friends-of-Friends halo finder.
+### `fof(...)`
+```python
+def fof(xp_list, vp_list=None, L_Box=512.0, linking_length=0.2,
+        np_halo_min=10, bound_check=False, verbose=0, return_ang_mom=False,
+        n_threads=None, mp_list=None, softening=None, z=0.0,
+        box=300.0, h0=0.67, omega_m=0.3, omega_l=0.7, n_sim=None,
+        units='cube', include_hubble_flow=False):
+```
 
 **Parameters:**
 
-- `xp_list` (array_like or list of array_like): Particle coordinates. Can be a single array with shape (3, N) or a list of arrays for multiple halos. Units: grid points.
-- `vp_list` (array_like or list of array_like, optional): Particle velocities with shape (3, N) or list of arrays. Required for binding check.
-- `L_Box` (float, optional): Box size. Default: 512.0
-- `linking_length` (float, optional): FOF linking length. Default: 0.2
-- `np_halo_min` (int, optional): Minimum number of particles to form a halo. Default: 10
-- `bound_check` (bool, optional): Enable velocity-based binding check. Default: False
-- `verbose` (int, optional): Verbosity level (0=quiet, 1=progress, 2=detailed). Default: 0
+- `xp_list` (array_like or list of array_like): Particle coordinates. Shape (3, N) or list of (3, Ni) arrays. Units depend on `units`.
+- `vp_list` (array_like or list of array_like, optional): Particle velocities. Required when `bound_check=True`.
+- `L_Box` (float, optional): Simulation box size for periodic boundary conditions. Default: 512.0.
+- `linking_length` (float, optional): FOF linking length. Default: 0.2.
+- `np_halo_min` (int, optional): Minimum number of particles to form a valid halo. Default: 10.
+- `bound_check` (bool, optional): Enable self-consistent gravitational binding check. Default: False.
+- `verbose` (int, optional): Verbosity level (0=quiet, 1=progress, 2=detailed). Default: 0.
+- `return_ang_mom` (bool, optional): Whether to return accumulated angular momentum. Default: False.
+- `n_threads` (int, optional): Max OpenMP threads. Default None uses all available cores (up to 256).
+- `mp_list` (scalar, array, or list of arrays, optional): Particle mass. Dimensionless grid weights in `units='cube'`, or \(M_\odot/h\) in `units='physical'`.
+- `softening` (float, optional): Gravitational softening length. Default 0.1 grid units in `units='cube'`; must be explicitly provided in `units='physical'` (comoving Mpc/h).
+- `z` (float, optional): Cosmological redshift. Default: 0.0.
+- `units` (`'cube'` or `'physical'`, optional): Unit system. Default `'cube'`.
+- `include_hubble_flow` (bool, optional): Whether to include relative Hubble expansion flow in binding kinetic energy. Default: False.
 
 **Returns:**
+- `in_halo` (numpy.ndarray): 1D boolean array indicating bound halo membership.
+- `ang_mom` (numpy.ndarray, optional): Accumulated angular momentum shape (3, nhalo) if `return_ang_mom=True`.
 
-- `in_halo` (numpy.ndarray): Boolean array indicating whether each particle belongs to a halo.
+### `fof_with_info(...)`
+Same arguments as `fof(...)`, returning a dictionary via $O(N)$ linear extraction:
+- `'in_halo'`: boolean mask array
+- `'nhalo_found'`: total number of identified halos
+- `'np_per_halo'`: array of particle counts per halo
+- `'halo_indices'`: list of arrays with global particle indices for each halo
+- `'ang_mom'`: accumulated angular momentum (if `return_ang_mom=True`)
 
 ## Algorithm
 
-The FOF algorithm identifies halos by linking particles that are within a specified linking length of each other. The algorithm consists of:
-
-1. **Grid Construction**: Particles are binned into a 3D grid for efficient neighbor search
-2. **FOF Search**: Neighboring particles within the linking length are linked
-3. **Chain Merging**: Linked particles are grouped into halos using a union-find algorithm
-4. **Binding Check** (optional): Particles are checked for gravitational binding using:
-   ```
-   0.5 * v_rel² < N_particles / r
-   ```
-   where v_rel is the relative velocity and r is the distance from the halo center.
+1. **Two-Pass Spatial Compressed Row Storage (CRS)**:
+   Binning particles into 3D cells using two sequential passes, eliminating linked-list pointers and achieving high cache locality.
+2. **13 Half-Neighborhood & Lock-Free Atomic DSU**:
+   Symmetric half-neighborhood search avoiding redundant pair calculations; lock-free atomic DSU (`atomic_dsu.c`) for multi-core graph union.
+3. **Adaptive Self-Consistent Gravitational Unbinding (`bound_test`)**:
+   - **Direct Summation** (\(N \le 1000\)): Continuous softening kernel with incremental subtraction of unpinned particles;
+   - **Multi-Resolution Isolated PM + C2 Short-Range Residuals** (\(N > 1000\)): 48/64/128/256 isolated grids with optimal Green functions and self-potential removal, coupled with cell-CSR short-range interactions;
+   - **2% Energy Batch Removal**: Iterative unbinding removing the least bound 2% particles per step up to 20 outer potential refreshes.
 
 ## Testing
 
